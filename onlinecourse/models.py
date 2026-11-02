@@ -1,103 +1,155 @@
 from django.db import models
+from django.utils.timezone import now
 from django.contrib.auth.models import User
 
-
-class Course(models.Model):
-    """Course model representing an online course."""
-    name = models.CharField(max_length=200)
-
-    def __str__(self):
-        return self.name
+# Create your models here.
 
 
-class Lesson(models.Model):
-    """Lesson model belonging to a Course."""
-    course = models.ForeignKey(
-        Course, related_name="lessons", on_delete=models.CASCADE
-    )
-    title = models.CharField(max_length=200)
-
-    def __str__(self):
-        return f"{self.course.name} - {self.title}"
-
-
-class Question(models.Model):
-    """
-    Question model used in exams.
-    Includes a ``grade`` field indicating the points for the question
-    and an ``is_get_score`` method to evaluate a selected choice.
-    """
-    lesson = models.ForeignKey(
-        Lesson, related_name="questions", on_delete=models.CASCADE
-    )
-    text = models.CharField(max_length=500)
-    grade = models.PositiveIntegerField(default=1)  # points awarded for a correct answer
-
-    def __str__(self):
-        return f"Q: {self.text[:50]}..."
-
-    def is_get_score(self, selected_choice):
-        """
-        Return ``True`` if the provided ``selected_choice`` is the correct answer
-        for this question.
-        """
-        return selected_choice.is_correct
-
-
-class Choice(models.Model):
-    """Possible answer for a Question."""
-    question = models.ForeignKey(
-        Question, related_name="choices", on_delete=models.CASCADE
-    )
-    text = models.CharField(max_length=300)
-    is_correct = models.BooleanField(default=False)
-
-    def __str__(self):
-        return f"{self.text} ({'Correct' if self.is_correct else 'Incorrect'})"
-
-
-class Learner(models.Model):
-    """Learner profile linked to Django's built‑in User."""
-    user = models.OneToOneField(User, on_delete=models.CASCADE)
+class Instructor(models.Model):
+    """An instructor who teaches one or more courses."""
+    user = models.ForeignKey(User, null=False, on_delete=models.CASCADE)
+    full_time = models.BooleanField(default=True)
+    total_learners = models.IntegerField(default=0)
 
     def __str__(self):
         return self.user.username
 
 
-class Submission(models.Model):
-    """
-    Stores a learner's attempt at a course exam.
-    The ``calculate_score`` method aggregates points from correctly answered
-    choices using the ``grade`` field of each Question.
-    """
-    learner = models.ForeignKey(
-        Learner, related_name="submissions", on_delete=models.CASCADE
+class Learner(models.Model):
+    """A learner who can enroll in one or more courses."""
+    user = models.ForeignKey(User, null=False, on_delete=models.CASCADE)
+    STUDENT = 'student'
+    DEVELOPER = 'developer'
+    DATA_SCIENTIST = 'data_scientist'
+    OCCUPATION_CHOICES = [
+        (STUDENT, 'Student'),
+        (DEVELOPER, 'Developer'),
+        (DATA_SCIENTIST, 'Data Scientist'),
+    ]
+    occupation = models.CharField(
+        null=False,
+        max_length=20,
+        choices=OCCUPATION_CHOICES,
+        default=STUDENT,
     )
+    social_link = models.URLField(max_length=200, null=True, blank=True)
+
+    def __str__(self):
+        return self.user.username + ' - ' + self.occupation
+
+
+class Course(models.Model):
+    """An online course made up of lessons and exam questions."""
+    name = models.CharField(null=False, max_length=100, default='online Course')
+    description = models.CharField(max_length=1000)
+    # A course can have many instructors and an instructor can teach many courses.
+    instructors = models.ManyToManyField(Instructor)
+    # A course can have many learners and a learner can enroll in many courses.
+    learners = models.ManyToManyField(Learner, through='Enrollment')
+
+    def __str__(self):
+        return 'Course: ' + self.name
+
+
+class Lesson(models.Model):
+    """A lesson that belongs to a course."""
+    title = models.CharField(null=False, max_length=30, default='Lesson Title')
     course = models.ForeignKey(
-        Course, related_name="submissions", on_delete=models.CASCADE
+        Course,
+        null=False,
+        on_delete=models.CASCADE,
+        related_name='lessons',
     )
-    score = models.IntegerField(default=0)
-    submitted_at = models.DateTimeField(auto_now_add=True)
+    content = models.TextField()
 
     def __str__(self):
-        return f"{self.learner} - {self.course.name} - {self.score} pts"
-
-    def calculate_score(self):
-        """Calculate total score based on correct choices."""
-        total = 0
-        for answer in self.answers.select_related("choice__question").all():
-            if answer.choice.is_correct:
-                total += answer.choice.question.grade
-        self.score = total
-        self.save()
+        return self.title
 
 
-class Answer(models.Model):
-    """Link a selected Choice to a Submission."""
-    submission = models.ForeignKey(
-        Submission, related_name="answers", on_delete=models.CASCADE
+class Enrollment(models.Model):
+    """An enrollment of a learner in a course (through model)."""
+    AUDIT = 'audit'
+    HONOR = 'honor'
+    COURSE_MODES = [
+        (AUDIT, 'Audit'),
+        (HONOR, 'Honor'),
+    ]
+    course = models.ForeignKey(
+        Course,
+        null=False,
+        on_delete=models.CASCADE,
+        related_name='enrollments',
     )
-    choice = models.ForeignKey(Choice, on_delete=models.CASCADE)
+    learner = models.ForeignKey(
+        Learner,
+        null=False,
+        on_delete=models.CASCADE,
+        related_name='enrollments',
+    )
+    date_enrolled = models.DateField(default=now, null=True)
+    mode = models.CharField(
+        null=False,
+        max_length=5,
+        choices=COURSE_MODES,
+        default=AUDIT,
+    )
+    rating = models.FloatField(null=True)
 
     def __str__(self):
-        return f"Answer for {self.submission}"
+        return 'Enrollment: ' + self.learner.user.username + ' - ' + self.course.name
+
+
+class Question(models.Model):
+    """An exam question that belongs to a course."""
+    # Each question belongs to exactly one course.
+    # Deleting a course deletes all of its questions.
+    course = models.ForeignKey(
+        Course,
+        null=False,
+        on_delete=models.CASCADE,
+        related_name='questions',
+    )
+    question_text = models.CharField(null=False, max_length=255)
+    # Points awarded when the question is answered correctly.
+    grade = models.IntegerField(null=False, default=0)
+
+    def __str__(self):
+        return self.question_text
+
+
+class Choice(models.Model):
+    """A possible answer for a question."""
+    # Each choice belongs to exactly one question.
+    # Deleting a question deletes all of its choices.
+    question = models.ForeignKey(
+        Question,
+        null=False,
+        on_delete=models.CASCADE,
+        related_name='choices',
+    )
+    choice_text = models.CharField(null=False, max_length=255)
+    # True when this choice is a correct answer for its question.
+    is_correct = models.BooleanField(default=False)
+
+    def __str__(self):
+        return self.choice_text
+
+
+class Submission(models.Model):
+    """A learner's submitted answers for a course exam."""
+    # Each submission is tied to exactly one enrollment.
+    # Deleting an enrollment deletes all of its submissions.
+    enrollment = models.ForeignKey(
+        Enrollment,
+        null=False,
+        on_delete=models.CASCADE,
+        related_name='submissions',
+    )
+    # A submission contains the choices selected by the learner, and a
+    # choice can be selected in many submissions.
+    choices = models.ManyToManyField(Choice)
+    # Total score earned by this submission.
+    grade = models.IntegerField(null=False, default=0)
+
+    def __str__(self):
+        return 'Submission ' + str(self.id) + ' for ' + self.enrollment.course.name
